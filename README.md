@@ -462,13 +462,81 @@
         balance leastconn
         server node1 10.128.0.19:24575 check
         server node2 10.128.0.8:24575 check
+
+    cache mycache
+        total-max-size 128      # MB
+        max-object-size 1000000 # bytes
+        max-age 60              # seconds
     ```
 
     проверяем и применяем конфиг
 
     ```console
-    sudo haproxu -c -f /etc/haproxy/haproxy.cfg
+    sudo haproxy -c -f /etc/haproxy/haproxy.cfg
     sudo service haproxy restart
     ```
 
     20. Мониторинг (Prometheus + Grafana)
+
+    Haproxy сам умеет в Prometheus, поэтому настроить его было довольно просто https://www.haproxy.com/blog/haproxy-exposes-a-prometheus-metrics-endpoint
+
+    добавляем нужный блок в конфиг
+
+    ```console
+    sudo nano /etc/haproxy/haproxy.cfg
+    ```
+
+    ```console
+    frontend stats
+        bind *:8404
+        option http-use-htx
+        http-request use-service prometheus-exporter if { path /metrics }
+        stats enable
+        stats uri /stats
+        stats refresh 10s
+    ```
+
+    Ставлю и настраиваю prometheus на той же VM где и база данных, поскольку вероятность что эта виртуалка уйдет в отказ гораздо меньше
+
+    ```console
+    sudo apt install prometheus 
+    ```
+
+    ```console
+    sudo nano /etc/prometheus/prometheus.yml
+    ```
+
+    добавляем адреса наблюдаемых машинок
+
+    ```console
+    - job_name: node2
+        # If prometheus-node-exporter is installed, grab stats about the local
+        # machine by default.
+        static_configs:
+        - targets: ['10.128.0.8:8404']
+
+    - job_name: node1
+        # If prometheus-node-exporter is installed, grab stats about the local
+        # machine by default.
+        static_configs:
+        - targets: ['10.128.0.19:8404']
+    ```
+
+    Запускаем сервис
+
+    ```console
+    sudo systemctl start prometheus
+    ```
+
+    Общепринятой является практика использовать Prometheus в связке с Grafana для интерпритации графического представления метрик, поэтому накатываю Grafana
+
+    ```console
+    sudo apt-get install -y adduser libfontconfig1 musl
+    wget https://dl.grafana.com/enterprise/release/grafana-enterprise_10.2.2_amd64.deb
+    sudo dpkg -i grafana-enterprise_10.2.2_amd64.deb
+    ```
+
+    Дальше настраиваю импорт данных из Prometheus и настраиваю дашборд (тут хорошая статейка, чтобы не расписывать лишнего https://losst.pro/ustanovka-i-nastrojka-prometheus). Дашбор выбрал этот https://grafana.com/grafana/dashboards/12693-haproxy-2-full/
+
+    
+
