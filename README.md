@@ -387,4 +387,88 @@
     CREATE INDEX idx_sessions_id ON public.sessions (id); 
     ```
 
-    19. 
+    19. Кеширование GET /long_dummy
+
+    Затрудняюсь точно сформулировать как я пришел к этой конфигурации, но запросы которые приходят от балансировщика - обрабатываются HAProxy на 8080 порту, если запрос дергает GET /long_dummy (который должен кэшироваться) HAProxy его отправляет на 8081 порт, который в свою очередь слушает nginx и уже он выступает в роли кешируешего прокси, остальные запросы соответственно пробрасываются на порты bingo. 
+    
+    *Изначально HAProxy должен был справляться с кешированием сам, но почемуто не завелся по своей же документации, хотя может это я недостаточно криворук.
+
+    ставим и настраиваем nginx под кеширование
+
+    ```console
+    sudo apt update
+    sudo apt install nginx
+    sudo systemctl enable nginx
+    sudo mkdir -p /var/nginx/cache
+    sudo nano /etc/nginx/nginx.conf
+    ```
+
+    добавляем конфиг в секцию http
+
+    ```console
+        proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m max_size=10g inactive=60m use_temp_path=off;
+
+        server {
+        listen 8081;
+
+        location /long_dummy {
+            proxy_pass http://127.0.0.1:24575;
+
+            proxy_cache my_cache;
+            proxy_cache_valid 200 1m;
+            proxy_cache_key "$scheme$request_method$host$request_uri";
+
+            proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+
+            proxy_ignore_headers Cache-Control;
+            add_header X-Proxy-Cache $upstream_cache_status;
+        }
+        }
+
+    ```
+
+    проверяем и применяем конфиг
+
+    ```console
+    sudo nginx -t
+    sudo service nginx reload
+    sudo service nginx restart
+    ```
+
+    ставим и настаиваем haproxy
+
+    ```console
+    sudo apt install haproxy
+    sudo nano /etc/haproxy/haproxy.cfg
+    ```
+
+    ```console
+    frontend fe_api
+        bind :8080
+        use_backend nginx if { path_beg /long_dummy }
+        default_backend be_api
+
+    backend nginx
+        balance source
+        server node1 10.128.0.19:8081 check
+        server node2 10.128.0.8:8081 check
+
+    backend be_api
+        # Get from cache / put in cache
+        # http-request cache-use mycache if { path_beg /long_dummy }
+        # http-response cache-store mycache
+
+        # server list
+        balance leastconn
+        server node1 10.128.0.19:24575 check
+        server node2 10.128.0.8:24575 check
+    ```
+
+    проверяем и применяем конфиг
+
+    ```console
+    sudo haproxu -c -f /etc/haproxy/haproxy.cfg
+    sudo service haproxy restart
+    ```
+
+    20. Мониторинг (Prometheus + Grafana)
